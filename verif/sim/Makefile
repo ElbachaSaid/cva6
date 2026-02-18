@@ -55,6 +55,37 @@ ifneq ($(steps),)
   spike_stepout = --steps=$(steps)
 endif
 
+# ------------------------------------------------------------
+# Questa Waveform support variables (created SEB_MU-E)
+# ------------------------------------------------------------
+WAVE_DIR      ?= waves
+WAVE_FILE     ?= $(WAVE_DIR)/uvmt_cva6.wlf
+
+# ------------------------------------------------------------
+# QUESTA GUI CONTROL (created by SEB_MU-E)
+# ------------------------------------------------------------
+GUI ?= 0
+
+#QUESTA_DO_BATCH = "do /root/cva6/scripts/waves.do;" 
+#QUESTA_DO_GUI   = "do /root/cva6/scripts/waves.do;"
+
+ifeq ($(GUI),1)
+  QUESTA_MODE_FLAG = -gui
+#  QUESTA_DO_CMD    = $(QUESTA_DO_GUI)
+else
+  QUESTA_MODE_FLAG = -c
+#  QUESTA_DO_CMD    = $(QUESTA_DO_BATCH)
+endif
+
+# ------------------------------------------------------------
+# Questa Code Coverage (created by SEB_MU-E)
+# ------------------------------------------------------------
+TESTNAME := $(shell basename -s .o $(elf))
+COV_DIR       := $(PWD)/coverage
+UCDB_FILE     := $(COV_DIR)/cov.$(TESTNAME).$(target).ucdb
+COV_TXT       := $(COV_DIR)/cov.$(TESTNAME).$(target).txt
+
+
 ##############################################
 # Set up Spike configuration files
 ##############################################
@@ -110,7 +141,7 @@ endif
 # Make these variables available to sub-Makefiles.
 export DEBUG TRACE_FAST TRACE_COMPACT
 
-TESTNAME := $(shell basename -s .o $(elf))
+#TESTNAME := $(shell basename -s .o $(elf))
 
 ifeq ($(isspostrun_opts), "")
 grep_address:
@@ -332,12 +363,14 @@ xrun-uvm: xrun_uvm_comp xrun_uvm_run
 	$(tool_path)/spike-dasm --isa=$(variant) < ./xrun_results/trace_rvfi_hart_00.dasm > $(log)
 
 
+	  ##-c -do "do /root/cva6/scripts/waves.do; quit -f" \
 ### QUESTA UVM rules
 questa_uvm_comp:
 	@echo "[QUESTA] Building Model"
 	mkdir -p $(VSIM_WORK_DIR)
 	vlib $(VSIM_WORK_DIR)
 	vlog -sv -sv17compat -64 $(COMMON_COMP_UVM_FLAGS) \
+	  +fcover \
 	  +incdir+$(QUESTASIM_HOME)/verilog_src/uvm-1.2/src/ \
 	  $(QUESTASIM_HOME)/verilog_src/uvm-1.2/src/uvm_pkg.sv \
 	  -timescale "1ns / 1ns" +acc=+rb \
@@ -352,32 +385,45 @@ questa_uvm_comp:
 	  +define+UNSUPPORTED_WITH+ \
 	  +define+QUESTA
 	vopt -work $(VSIM_WORK_DIR) \
-	    -64 +acc uvmt_cva6_tb -o uvmt_cva6_tb_opt
+	    -64 -debugdb -cover bcesft \
+	    +acc uvmt_cva6_tb -o uvmt_cva6_tb_opt
 
 questa_uvm_run:
 	@echo "[QUESTA] Running Model"
+	mkdir -p $(WAVE_DIR)
+	mkdir -p $(COV_DIR)
 	vsim -64  \
 	  $(COMMON_RUN_UVM_FLAGS) \
 	  $(COMMON_RUN_ARGS) \
 	  -sv_lib $(QUESTASIM_HOME)/uvm-1.2/linux_x86_64/uvm_dpi \
-	  -c -do "run -all; " \
+	  -wlf $(WAVE_FILE) \
+	  -voptargs="+acc=rn" \
+	  $(QUESTA_MODE_FLAG) \
+	  -coverage \
+	  -do "onfinish stop; run -all; coverage save -onexit $(UCDB_FILE); quit -f" \
 	  -work $(VSIM_WORK_DIR) -t 1ns \
 	  -suppress vsim-8451 \
 	  -suppress 3829 -suppress vsim-8386\
 	  +permissive \
-	  -sv_seed 0 \
+	  -sv_seed 10 \
 	  -noautoldlibpath \
 	  +define+UNSUPPORTED_WITH+ \
-	   $(issrun_opts) \
-	  uvmt_cva6_tb_opt
-	  $(tool_path)/spike-dasm --isa=$(variant) < ./trace_rvfi_hart_00.dasm > $(log)
-	  grep $(isspostrun_opts) ./trace_rvfi_hart_00.dasm
+	  $(issrun_opts) \
+	  uvmt_cva6_tb_opt 
+	$(tool_path)/spike-dasm --isa=$(variant) < ./trace_rvfi_hart_00.dasm > $(log)
+	grep $(isspostrun_opts) ./trace_rvfi_hart_00.dasm
+questa_uvm_cov: 
+	vcover report -output $(COV_TXT) $(UCDB_FILE)
 
-	# TODO: Add support for waveform collection.
+	# TODO: Add support for waveform collection -> "DONE" -do $(QUESTA_DO_CMD)
+	# How to open the gui : define environment variable GUI=1 with "export GUI=1" before executing the test
+	# Note: There is a Timeout of 500s when the gui is opened by regression script "cva6.py"  
 
 questa-uvm:
 	make questa_uvm_comp
 	make questa_uvm_run
+	make questa_uvm_cov
+
 
 
 generate_cov_dash:
